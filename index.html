@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>سباق السيارات</title>
+  <style>
+    body {
+      margin: 0;
+      background: #1e293b;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: sans-serif;
+      color: #f8fafc;
+    }
+    #gameContainer {
+      position: relative;
+      border: 3px solid #475569;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      background: #334155;
+    }
+    #hud {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      left: 10px;
+      display: flex;
+      justify-content: space-between;
+      font-weight: bold;
+      font-size: 18px;
+      pointer-events: none;
+    }
+    #msgOverlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.85);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 15px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #38bdf8;
+      color: #0f172a;
+    }
+    button:hover {
+      background: #7dd3fc;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="gameContainer">
+    <canvas id="roadCanvas" width="320" height="500"></canvas>
+    
+    <div id="hud">
+      <div>النقاط: <span id="scoreText">0</span></div>
+    </div>
+
+    <div id="msgOverlay">
+      <h2 id="overlayTitle">سباق السيارات</h2>
+      <p id="overlayDesc">استخدم الأسهم (يمين / يسار) للتفادي</p>
+      <button id="actionBtn">بدء اللعب</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('roadCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreText = document.getElementById('scoreText');
+    const msgOverlay = document.getElementById('msgOverlay');
+    const overlayTitle = document.getElementById('overlayTitle');
+    const actionBtn = document.getElementById('actionBtn');
+
+    const roadWidth = canvas.width;
+    const roadHeight = canvas.height;
+
+    let isPlaying = false;
+    let score = 0;
+    let roadOffset = 0;
+
+    // سيارة اللاعب
+    const player = {
+      x: roadWidth / 2 - 15,
+      y: roadHeight - 80,
+      w: 30,
+      h: 50,
+      speed: 4,
+      moveLeft: false,
+      moveRight: false
+    };
+
+    // قائمة المركبات المقابلة
+    let obstacles = [];
+    let spawnTimer = 0;
+
+    // استماع للأزرار
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') player.moveRight = true;
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') player.moveLeft = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') player.moveRight = false;
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') player.moveLeft = false;
+    });
+
+    function resetGame() {
+      score = 0;
+      scoreText.innerText = score;
+      player.x = roadWidth / 2 - 15;
+      obstacles = [];
+      spawnTimer = 0;
+      isPlaying = true;
+      msgOverlay.style.display = 'none';
+      requestAnimationFrame(gameLoop);
+    }
+
+    function gameOver() {
+      isPlaying = false;
+      overlayTitle.innerText = 'انتهت اللعبة!';
+      actionBtn.innerText = 'إعادة المحاولة';
+      msgOverlay.style.display = 'flex';
+    }
+
+    function drawCar(x, y, w, h, bodyColor) {
+      // جسم السيارة
+      ctx.fillStyle = bodyColor;
+      ctx.fillRect(x, y, w, h);
+
+      // الزجاج الأمامي والخلفي
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(x + 4, y + 10, w - 8, 8);
+      ctx.fillRect(x + 4, y + 32, w - 8, 6);
+
+      // الإطارات
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x - 3, y + 6, 3, 10);
+      ctx.fillRect(x + w, y + 6, 3, 10);
+      ctx.fillRect(x - 3, y + 34, 3, 10);
+      ctx.fillRect(x + w, y + 34, 3, 10);
+    }
+
+    function drawRoad() {
+      // الأسفلت
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(0, 0, roadWidth, roadHeight);
+
+      // الخطوط الجانبية
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(10, 0, 4, roadHeight);
+      ctx.fillRect(roadWidth - 14, 0, 4, roadHeight);
+
+      // الخط المتقطع في المنتصف
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([20, 20]);
+      ctx.lineDashOffset = -roadOffset;
+
+      ctx.beginPath();
+      ctx.moveTo(roadWidth / 2, 0);
+      ctx.lineTo(roadWidth / 2, roadHeight);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function checkCollision(r1, r2) {
+      return !(
+        r1.x > r2.x + r2.w ||
+        r1.x + r1.w < r2.x ||
+        r1.y > r2.y + r2.h ||
+        r1.y + r1.h < r2.y
+      );
+    }
+
+    function update() {
+      // تحريك خلفية الطريق
+      roadOffset = (roadOffset + 5) % 40;
+
+      // حركة اللاعب
+      if (player.moveRight && player.x + player.w < roadWidth - 15) {
+        player.x += player.speed;
+      }
+      if (player.moveLeft && player.x > 15) {
+        player.x -= player.speed;
+      }
+
+      // إضافة عقبات جديدة
+      spawnTimer++;
+      if (spawnTimer > 75) {
+        const laneX = Math.random() * (roadWidth - 70) + 20;
+        obstacles.push({
+          x: laneX,
+          y: -60,
+          w: 30,
+          h: 50,
+          speed: 3 + Math.random() * 2
+        });
+        spawnTimer = 0;
+      }
+
+      // تحريك وفحص العقبات
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.y += obs.speed;
+
+        // التحقق من الاصطدام
+        if (checkCollision(player, obs)) {
+          gameOver();
+          return;
+        }
+
+        // خروج العقبة من أسفل الشاشة
+        if (obs.y > roadHeight) {
+          obstacles.splice(i, 1);
+          score += 10;
+          scoreText.innerText = score;
+        }
+      }
+    }
+
+    function render() {
+      drawRoad();
+      drawCar(player.x, player.y, player.w, player.h, '#38bdf8');
+
+      obstacles.forEach(obs => {
+        drawCar(obs.x, obs.y, obs.w, obs.h, '#ef4444');
+      });
+    }
+
+    function gameLoop() {
+      if (!isPlaying) return;
+      update();
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    actionBtn.addEventListener('click', resetGame);
+  </script>
+</body>
+</html>
